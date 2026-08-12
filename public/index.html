@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NYC Traffic Volume Update Finder</title>
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Traffic-Volume Count Update Finder</h1>
+      <p>Prioritizes which count locations to re-collect first, by comparing the historical AADT trend against recent actuals.</p>
+    </div>
+    <button class="theme-toggle" id="themeToggle" type="button">Toggle theme</button>
+  </header>
+
+  <main>
+    <div class="stat-tiles" id="statTiles"></div>
+
+    <div class="filters">
+      <div class="filter-field">
+        <label for="countySelect">County</label>
+        <select id="countySelect"></select>
+      </div>
+      <div class="filter-field">
+        <label for="ageThreshold">Min age (years)</label>
+        <input id="ageThreshold" type="number" min="0" placeholder="any" />
+      </div>
+      <div class="filter-field">
+        <label for="devThreshold">Min |deviation| (%)</label>
+        <input id="devThreshold" type="number" min="0" placeholder="any" />
+      </div>
+      <div class="filter-field">
+        <label for="confidenceSelect">Trend confidence</label>
+        <select id="confidenceSelect">
+          <option value="">any</option>
+          <option value="high">high</option>
+          <option value="low">low</option>
+          <option value="none">none</option>
+        </select>
+      </div>
+      <div class="view-toggle">
+        <button id="viewListBtn" class="active" type="button">List</button>
+        <button id="viewMapBtn" type="button">Map</button>
+      </div>
+    </div>
+
+    <p class="geocode-note" id="geocodeNote"></p>
+
+    <div id="listView">
+      <table class="segments-table">
+        <thead>
+          <tr>
+            <th>Priority</th>
+            <th>Station</th>
+            <th>Road / Municipality</th>
+            <th class="num">Age (yrs)</th>
+            <th>Trend confidence</th>
+            <th class="num">Expected AADT</th>
+            <th class="num">Recent est.</th>
+            <th class="num">Deviation</th>
+            <th>Spatial match</th>
+          </tr>
+        </thead>
+        <tbody id="segmentsBody"></tbody>
+      </table>
+      <div id="emptyState" class="empty-state" style="display:none;">No segments match the current filters.</div>
+    </div>
+
+    <div id="mapView">
+      <div id="leafletMap" style="height:100%;"></div>
+    </div>
+  </main>
+
+  <div id="overlay"></div>
+  <div id="drawer">
+    <button class="close-btn" id="drawerClose" type="button">Close</button>
+    <div id="drawerContent"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/chart.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
