@@ -1,13 +1,12 @@
-<<<<<<< HEAD
-# traffic-volume-tracking-update-finder
-A dashboard to inform NYC DOT workers of which tracker data point they should update in their Automated Traffic Volume Counts dataset by comparing outdated data with updated traffic data to see if anything needs changing.
-=======
 # NYC Traffic Volume Update Finder
 
-A dashboard for NYSDOT / NYC DOT planning staff that ranks traffic-volume
-count locations by how urgently they need to be re-collected — combining
-historical AADT trend, a recent NYC automated-count observation, and live
-TomTom conditions into one prioritized list.
+A dashboard to inform NYC DOT workers of which tracker data point they should
+update in their Automated Traffic Volume Counts dataset by comparing outdated
+data with updated traffic data to see if anything needs changing.
+
+It ranks traffic-volume count locations by how urgently they need to be
+re-collected — combining historical AADT trend, a recent NYC automated-count
+observation, and live TomTom conditions into one prioritized list.
 
 ## Running it
 
@@ -144,4 +143,3 @@ the client retries transient timeouts/5xx up to 3 times with backoff.
 - TomTom Flow Segment Data is speed/congestion, not volume — used only as
   contextual "is there something going on here" signal in the detail view,
   per spec.
->>>>>>> 7137e38 (Created first draft of data product based on insight meant to help DOT)
