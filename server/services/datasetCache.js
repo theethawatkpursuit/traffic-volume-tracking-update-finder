@@ -42,6 +42,31 @@ function emptyCache() {
   return { version: CACHE_VERSION, entries: {}, timings: {} };
 }
 
+/**
+ * Reads the build-time snapshot bundled with the deployment. Entries are
+ * re-stamped as loaded now rather than keeping their build timestamp: the
+ * snapshot is the freshest data this deployment has, so expiring it by TTL
+ * would just force the very refetch it exists to avoid — and on a serverless
+ * host that refetch is exactly what times out.
+ */
+function loadSnapshot() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(config.datasetSnapshotPath, 'utf8'));
+    if (parsed?.version !== CACHE_VERSION) return null;
+    const now = Date.now();
+    const entries = {};
+    for (const [key, entry] of Object.entries(parsed.entries ?? {})) {
+      entries[key] = { loadedAt: now, value: entry.value };
+    }
+    const count = Object.keys(entries).length;
+    if (count === 0) return null;
+    console.log(`[dataset-cache] seeded from build snapshot (${count} entries)`);
+    return { version: CACHE_VERSION, entries, timings: parsed.timings ?? {} };
+  } catch {
+    return null; // no snapshot built — fall back to fetching on demand
+  }
+}
+
 function load() {
   if (cache) return cache;
   try {
@@ -61,6 +86,14 @@ function load() {
       : emptyCache();
   } catch {
     cache = emptyCache(); // missing or corrupt — start clean
+  }
+
+  // Nothing usable from the writable cache? Fall back to the bundled snapshot.
+  // This is the normal path on a fresh deploy and the only path on a
+  // serverless host, where the writable directory is ephemeral and empty.
+  if (Object.keys(cache.entries).length === 0) {
+    const snapshot = loadSnapshot();
+    if (snapshot) cache = snapshot;
   }
   return cache;
 }

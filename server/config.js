@@ -127,6 +127,17 @@ module.exports = {
   geocodeCachePath: path.join(resolvedDataDir, 'geocode-cache.json'),
   datasetCachePath: path.join(resolvedDataDir, 'dataset-cache.json'),
 
+  // Build-time snapshot that ships with the deployment (see
+  // scripts/build-snapshot.js). Always read from the project directory, not
+  // the resolved cache directory: it's part of the bundle, not something
+  // written at runtime. Read-only, so it works on a serverless filesystem.
+  datasetSnapshotPath: path.join(__dirname, '..', 'data', 'dataset-snapshot.json'),
+
+  // The geocode cache likewise ships with the repo — regenerating it means
+  // ~1.6 hours of rate-limited Nominatim calls, and without it no station can
+  // be located, so no spatial match is possible.
+  bundledGeocodeCachePath: path.join(__dirname, '..', 'data', 'geocode-cache.json'),
+
   // Background geocode warmup makes sense only in a long-lived process with
   // somewhere durable to write. Serverless invocations are killed after the
   // response, so it would burn Nominatim's rate limit for nothing.

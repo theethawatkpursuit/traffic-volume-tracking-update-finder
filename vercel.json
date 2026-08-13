@@ -2,7 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.js": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "// includeFiles": "Vercel traces `require`d modules automatically, but these are read at runtime by path, so they must be included explicitly. Without them the function starts with no geocode cache and no snapshot, and returns an empty segment list.",
+      "includeFiles": "data/**"
     }
   },
   "rewrites": [

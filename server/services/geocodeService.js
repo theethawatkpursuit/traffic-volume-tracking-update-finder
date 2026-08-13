@@ -26,13 +26,28 @@ function ensureDataDir() {
 
 function loadCache() {
   if (cache) return cache;
-  ensureDataDir();
   try {
-    const raw = fs.readFileSync(config.geocodeCachePath, 'utf8');
-    cache = new Map(Object.entries(JSON.parse(raw)));
+    ensureDataDir();
   } catch {
-    cache = new Map();
+    // Read-only filesystem — we can still read a bundled cache below.
   }
+
+  // Writable copy first (a persistent host's volume, or a local checkout),
+  // then the copy committed to the repo. On a serverless deploy the writable
+  // directory is an empty temp dir, so the bundled file is the only source —
+  // and without it every station is unlocatable, no spatial match is possible,
+  // and the segment list comes back empty.
+  for (const candidate of [config.geocodeCachePath, config.bundledGeocodeCachePath]) {
+    try {
+      const raw = fs.readFileSync(candidate, 'utf8');
+      cache = new Map(Object.entries(JSON.parse(raw)));
+      if (cache.size > 0) return cache;
+    } catch {
+      // try the next candidate
+    }
+  }
+
+  cache = cache ?? new Map();
   return cache;
 }
 

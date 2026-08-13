@@ -2,6 +2,14 @@ node_modules/
 .env
 .env.*
 !.env.example
-data/*cache*.json
+# Transient upstream data — refetched on demand, must never be committed
+# (a stale copy would serve old counts while hiding a broken fetch).
+data/dataset-cache.json
+
+# NOTE: data/geocode-cache.json is deliberately NOT ignored. It is a build
+# artifact, not a cache in the disposable sense: regenerating it means ~5,400
+# Nominatim lookups at 1 req/sec (~1.6 hours), and without it every AADT
+# station is unlocatable, so no spatial match is possible and the app returns
+# an empty list. It has to ship with the deployment.
 *.log
 .DS_Store
