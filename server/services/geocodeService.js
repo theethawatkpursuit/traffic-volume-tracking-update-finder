@@ -14,7 +14,7 @@ const config = require('../config');
 // validated against known segments before it's trusted (see
 // server/services/spatialJoin.js and test/spatialJoin.test.js).
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
-const USER_AGENT = 'nyc-traffic-volume-update-finder/1.0 (DOT planning dashboard; contact via project README)';
+const USER_AGENT = 'recountnyc/1.0 (DOT planning dashboard; contact via project README)';
 const MIN_REQUEST_SPACING_MS = 1100; // Nominatim usage policy: max 1 req/sec
 
 let cache = null; // Map<queryKey, entry>

@@ -22,7 +22,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
  */
 if (require.main === module) {
   app.listen(config.port, () => {
-    console.log(`NYC Traffic Volume Update Finder listening on http://localhost:${config.port}`);
+    console.log(`RecountNYC listening on http://localhost:${config.port}`);
     console.log(
       `Cache directory: ${config.dataDir}${config.dataDirIsPersistent ? '' : ' (ephemeral)'}`
     );

@@ -1,5 +1,5 @@
 {
-  "name": "nyc-traffic-volume-update-finder",
+  "name": "recountnyc",
   "version": "1.0.0",
   "description": "Dashboard prioritizing which traffic-volume count locations should be re-collected first, for NYSDOT / NYC DOT planning staff.",
   "main": "server.js",

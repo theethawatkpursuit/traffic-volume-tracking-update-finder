@@ -19,7 +19,7 @@ require('dotenv').config();
  * pointless on ephemeral storage and is skipped there.
  */
 const projectDataDir = path.join(__dirname, '..', 'data');
-const ephemeralDataDir = path.join(os.tmpdir(), 'nyc-traffic-volume-update-finder');
+const ephemeralDataDir = path.join(os.tmpdir(), 'recountnyc');
 const resolvedDataDir =
   firstWritableDir([process.env.DATA_DIR, projectDataDir, ephemeralDataDir]) ?? ephemeralDataDir;
 const dataDirIsPersistent = resolvedDataDir !== ephemeralDataDir;

@@ -10,7 +10,7 @@
 # the background geocoder starts over from an empty cache.
 services:
   - type: web
-    name: nyc-traffic-volume-update-finder
+    name: recountnyc
     runtime: docker
     dockerfilePath: ./Dockerfile
     # Disks require a paid instance type — Render's free tier has no persistent
