@@ -41,6 +41,9 @@ npm test
   a deviation between the trended/expected value and the recent observation.
 - Pulls **live TomTom conditions** on demand, only for the segment currently
   open in the detail view — never bulk.
+- Pulls the **511NY event feed** (`GetEvents`) in bulk once every 5 minutes and
+  matches active roadwork/closures/incidents to each station by proximity —
+  this is what supplies `is_explained` below.
 - Scores and ranks every segment by `priority_score`, per the spec's formula:
   `age_years × |deviation_pct| × (is_explained ? 0.25 : 1)`.
 
@@ -57,6 +60,7 @@ server/services/spatialJoin.js   AADT <-> NYC count nearest-neighbor matching
 server/services/deviationEngine.js    the priority_score formula (pure fn)
 server/services/segmentsRepository.js orchestration, caching, filtering
 server/services/tomtomService.js      on-demand live conditions
+server/services/fiveElevenService.js  511NY event feed -> is_explained input
 server/routes/api.js             /api/segments, /api/segments/:county/:id, /api/counties
 public/                          vanilla HTML/CSS/JS dashboard (no build step)
 test/                            node:test unit + spatial-join validation tests
@@ -120,6 +124,51 @@ to a few thousand daily totals for the lookback window
 aggregation query; rather than silently loosening the configured timeout,
 the client retries transient timeouts/5xx up to 3 times with backoff.
 
+**6. 511NY supplies `is_explained`; TomTom stayed as display context.**
+The priority formula's `is_explained` term needs a *reason* ("there is a work
+zone here"), not a speed reading. TomTom Flow Segment Data can only say
+traffic is slow, not why, and it's a per-point on-demand call — too expensive
+to run for every row of the list, which is where the ranking is decided. So
+`hasActiveConstruction` is fed from 511NY's `GetEvents`, which returns the
+whole state's events in one bulk call (~2.4k statewide, ~390 active in the
+five boroughs) and can therefore be applied to every segment. TomTom was kept
+alongside it, unchanged, in the detail drawer: the two answer different
+questions ("is something happening here" vs. "how bad is it right now").
+
+Only `roadwork`, `closures` and `accidentsAndIncidents` de-weight a segment.
+`specialEvents` (concerts, parades, ballgames) and `transitOperations` (bus
+stop bypasses) are displayed in the drawer but deliberately excluded from the
+formula — a one-evening event is not a reason to stop trusting a multi-year
+AADT baseline.
+
+**7. 511NY timestamps are DD/MM/YYYY, and it matters.** The feed's
+`StartDate`/`PlannedEndDate` fields use day-first ordering while the
+`Description` text of the same record uses US month-first — verified against
+the live feed, where 1508 of ~2400 `StartDate` values have a leading
+component > 12 and none have a second component > 12. Passing these to
+`new Date()` parses them as MM/DD and shifts events by months, which would
+silently corrupt the active-now filter, so `fiveElevenService.parse511Date`
+parses them explicitly (covered in `test/fiveEleven.test.js`). Most events
+carry no `PlannedEndDate` at all — that's how 511 represents open-ended
+long-term construction, so those are treated as ongoing and flagged
+`isOpenEnded` in the UI rather than silently dropped or silently trusted.
+
+**8. Current-year volume is linked to, not scraped.** NYSDOT's Site Dashboard
+(Drakewell-hosted, separate from the ArcGIS services) carries current-year
+AADT trend plus hourly and daily volume per station — years newer than
+anything NYSDOT publishes through an open API, where NYC data caps at 2019
+(AADT), 2021 (ArcGIS short counts) and 2022 (HDSB bulk CSVs). It is
+deliberately not machine readable: reCAPTCHA Enterprise on every page load
+and `Disallow: /` in robots.txt. So the app doesn't fetch it. Instead every
+segment carries an `officialDashboardUrl` and the detail drawer links out to
+it, putting the authoritative current numbers one click from the ranking
+without automating a system that asks not to be automated. The dashboard's
+`cosit` parameter is just the station number padded to six digits plus six
+zeros (`54255` -> `054255000000`), verified against the ArcGIS AADT layer and
+pinned in `test/nysdotLinks.test.js`. Programmatic access to that data is a
+request to make of NYSDOT Traffic Monitoring
+(MO-TrafficDataViewer@dot.state.ny.us), not something to work around.
+
 ## Filters & scope
 
 - **County**: defaults to the 5 NYC boroughs (where all three sources
@@ -143,3 +192,18 @@ the client retries transient timeouts/5xx up to 3 times with backoff.
 - TomTom Flow Segment Data is speed/congestion, not volume — used only as
   contextual "is there something going on here" signal in the detail view,
   per spec.
+- **511NY events are point-located, but work zones are corridors.** Each event
+  carries a single lat/long (plus a `MapEncodedPolyline` the app does not
+  currently decode), so a multi-mile construction project is matched from one
+  end of it. Combined with the road-name-level station geocode, this means an
+  event on one road can be credited to a station on a *different* nearby road —
+  the same interchange problem the AADT↔counts join has, and it shows up in the
+  same places (dense overlapping expressways in the Bronx). Every matched event
+  therefore displays its roadway name and real distance, so a planner can see
+  "roadwork on OLYMPIA BLVD (329m)" against a station on Baden Pl and judge it.
+  Decoding the polyline and matching against the corridor is the obvious
+  improvement if this proves too loose in practice.
+- Because `is_explained` cuts `priority_score` to 25%, a false event match
+  pushes a genuinely stale segment *down* the list. The 511 tag is shown
+  in the list view (not just the drawer) specifically so that de-weighting is
+  visible rather than silent.

@@ -1,6 +1,7 @@
 const express = require('express');
 const repo = require('../services/segmentsRepository');
 const tomtomService = require('../services/tomtomService');
+const fiveElevenService = require('../services/fiveElevenService');
 
 const router = express.Router();
 
@@ -20,10 +21,18 @@ router.get('/segments', async (req, res, next) => {
       deviationThresholdPct,
       confidenceLevel,
     });
+    const eventIndex = await fiveElevenService.getNycEventIndex();
     res.json({
       segments,
       summary: repo.summarize(segments),
       geocodeProgress: await repo.geocodeProgressForScope(county || undefined),
+      // Feed-level status so the UI can distinguish "no work zones near any of
+      // these segments" from "511 didn't answer, so nothing was checked".
+      eventFeed: {
+        status: eventIndex.status,
+        activeNycEvents: eventIndex.count,
+        message: eventIndex.message ?? null,
+      },
     });
   } catch (err) {
     next(err);

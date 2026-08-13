@@ -2,8 +2,10 @@ const config = require('../config');
 const aadtService = require('./aadtService');
 const nycCountsService = require('./nycCountsService');
 const geocodeService = require('./geocodeService');
+const fiveElevenService = require('./fiveElevenService');
 const { joinStationsToCounts, COUNTY_TO_BOROUGH } = require('./spatialJoin');
 const { computeDeviation } = require('../services/deviationEngine');
+const { siteDashboardUrl } = require('../utils/nysdotLinks');
 
 const NYC_COUNTIES = Object.keys(COUNTY_TO_BOROUGH); // Bronx, Kings, New York, Queens, Richmond
 const ALL_NY_COUNTIES = [
@@ -49,6 +51,12 @@ async function buildCountySegments(county) {
 
   let estimatesBySegmentDirection = new Map();
   let joinByStationId = new Map();
+  // 511NY events for this county only. The feed is statewide and already
+  // indexed by county, so each station is only distance-checked against its
+  // own county's events — same scoping trick as the borough filter in
+  // spatialJoin, and it keeps this an O(stations x county events) pass.
+  let countyEvents = [];
+  let eventFeedStatus = 'not-applicable-outside-nyc';
   if (isNycCounty) {
     const { estimates } = await getNycCountEstimates();
     for (const e of estimates) {
@@ -56,6 +64,10 @@ async function buildCountySegments(county) {
     }
     const joins = joinStationsToCounts(stations, estimates);
     for (const j of joins) joinByStationId.set(j.stationId, j);
+
+    const eventIndex = await fiveElevenService.getNycEventIndex();
+    countyEvents = eventIndex.byCounty.get(county) ?? [];
+    eventFeedStatus = eventIndex.status;
   }
 
   return stations.map((station) => {
@@ -64,10 +76,30 @@ async function buildCountySegments(county) {
       ? estimatesBySegmentDirection.get(`${join.spatialMatch.segmentId}|${join.spatialMatch.direction}`)
       : null;
 
-    const deviation = computeDeviation({ trend: station.trend, nycEstimate });
+    // Events can only be matched to a station we've managed to geocode — the
+    // same precondition the count join has, so an ungeocoded station keeps
+    // hasActiveConstruction as null ("not checked") rather than false.
+    const stationLatLon = join?.stationLat != null ? { lat: join.stationLat, lon: join.stationLon } : null;
+    const nearbyEvents =
+      eventFeedStatus === 'ok' && stationLatLon
+        ? fiveElevenService.findEventsNear(stationLatLon, countyEvents)
+        : [];
+    const { hasActiveConstruction, explainedBy } = fiveElevenService.explanationFor(nearbyEvents);
+    const isEventCheckMeaningful = eventFeedStatus === 'ok' && stationLatLon != null;
+
+    const deviation = computeDeviation({
+      trend: station.trend,
+      nycEstimate,
+      hasActiveConstruction: isEventCheckMeaningful ? hasActiveConstruction : null,
+      explainedBy,
+    });
 
     return {
       stationId: station.stationId,
+      // Link to NYSDOT's own dashboard for this station — the only public place
+      // carrying current-year volume. Available for every county, including the
+      // 57 outside NYC where no recent-count comparison is possible at all.
+      officialDashboardUrl: siteDashboardUrl(station.stationId),
       county: station.county,
       municipality: station.municipality,
       roadName: station.roadName,
@@ -91,6 +123,18 @@ async function buildCountySegments(county) {
             observationWindow: nycEstimate.observationWindow,
           }
         : null,
+      liveEvents: {
+        status: isEventCheckMeaningful
+          ? 'ok'
+          : eventFeedStatus === 'ok'
+            ? 'station-not-located'
+            : eventFeedStatus,
+        // Capped for payload size — the full count is reported alongside so a
+        // segment sitting inside a dense cluster of work zones still reads as
+        // such in the UI.
+        matchedCount: nearbyEvents.length,
+        events: nearbyEvents.slice(0, 5),
+      },
       ...deviation,
     };
   });
@@ -131,11 +175,20 @@ function summarize(segments) {
   const staleWithSignificantUnexplained = stale.filter(
     (s) => s.isDeviationSignificant === true && s.isExplained === false
   );
+  // Segments whose deviation was set aside specifically because 511 reports a
+  // work zone/closure on them — i.e. the ones the event feed actively pushed
+  // down the list. Counted separately from low-confidence-trend "explained"
+  // cases, which are a statement about our own data rather than the road.
+  const explainedByLiveEvents = segments.filter(
+    (s) => s.isExplained && s.liveEvents?.matchedCount > 0 && s.explanation?.startsWith('511NY:')
+  );
+
   return {
     total,
     pctOlderThan5Years: Math.round((stale.length / total) * 1000) / 10,
     pctStaleWithSignificantUnexplainedDeviation:
       stale.length === 0 ? 0 : Math.round((staleWithSignificantUnexplained.length / stale.length) * 1000) / 10,
+    explainedByLiveEventsCount: explainedByLiveEvents.length,
   };
 }
 

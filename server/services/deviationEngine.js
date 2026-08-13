@@ -8,13 +8,18 @@ const config = require('../config');
  *
  * @param {object} trend - output of utils/regression.fitAadtTrend
  * @param {object|null} nycEstimate - output of nycCountsService.estimateAadtFromDailyTotals (one entry)
- * @param {boolean|null} hasActiveConstruction - from TomTom context; null when not checked (list view — TomTom is on-demand only)
+ * @param {boolean|null} hasActiveConstruction - from the 511NY event feed (see
+ *   fiveElevenService.explanationFor); null when not checked — outside NYC, or
+ *   when 511 was unavailable — which is deliberately distinct from false
+ *   ("checked, nothing there").
+ * @param {string|null} explainedBy - human-readable reason for the UI, when known
  * @param {number} deviationThresholdPct
  */
 function computeDeviation({
   trend,
   nycEstimate = null,
   hasActiveConstruction = null,
+  explainedBy = null,
   deviationThresholdPct = config.deviationThresholdPct,
 }) {
   const isLowConfidenceTrend = trend.trendConfidence === 'low' || trend.trendConfidence === 'none';
@@ -48,6 +53,16 @@ function computeDeviation({
   // low/no-confidence (a shaky baseline shouldn't be read as a "surprise").
   const isExplained = hasActiveConstruction === true || isLowConfidenceTrend;
 
+  // Name the cause, preferring the concrete external one. "Explained" now has
+  // two possible sources, and a planner deciding whether to send a crew needs
+  // to know which — a real work zone on the road is actionable information,
+  // a thin regression baseline is a caveat about our own data.
+  const explanation = hasActiveConstruction === true
+    ? explainedBy ?? 'active roadwork/closure nearby'
+    : isLowConfidenceTrend
+      ? `low-confidence trend (${trend.trendConfidence}, ${trend.dataPointCount} data point${trend.dataPointCount === 1 ? '' : 's'})`
+      : null;
+
   const ageYears = trend.ageYears ?? 0;
   const deviationMagnitudeForScore = hasDeviationSignal
     ? Math.abs(deviationPct)
@@ -60,6 +75,7 @@ function computeDeviation({
     deviationPct,
     isDeviationSignificant,
     isExplained,
+    explanation,
     isSingleEverCount,
     priorityScore,
     priorityBasis,

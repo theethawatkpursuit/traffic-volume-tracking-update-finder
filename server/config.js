@@ -44,7 +44,24 @@ module.exports = {
     appToken: requireEnv('NY_OPEN_DATA_APP_TOKEN'),
   },
 
+  // 511NY event feed. Unlike the two Socrata URLs above, this one is a plain
+  // API root — the endpoint name, key and format are query params appended at
+  // request time (see fiveElevenService), so the key never lives inside a URL
+  // string that could end up in a log line.
+  fiveEleven: {
+    baseUrl: requireEnv('FIVE_ELEVEN_BASE_URL').replace(/\/+$/, ''),
+    apiKey: requireEnv('FIVE_ELEVEN_API_KEY'),
+  },
+
   apiTimeoutMs: Number(process.env.API_TIMEOUT_MS) || 15000,
+
+  // NYSDOT's official Site Dashboard. Link target only — this app never
+  // requests it (see server/utils/nysdotLinks.js for why). Overridable
+  // without a code change in case NYSDOT moves or renames the node.
+  nysdotDashboard: {
+    baseUrl: process.env.NYSDOT_DASHBOARD_BASE_URL || 'https://nysdottrafficdata.drakewell.com',
+    node: process.env.NYSDOT_DASHBOARD_NODE || 'NYSDOT_SC',
+  },
 
   // Analytical thresholds (spec calls out ~15-20%; keep configurable at
   // runtime via query params, this is just the default).
@@ -62,6 +79,16 @@ module.exports = {
   // off, so 200m would silently miss real matches; every match still
   // reports its actual distanceMeters so a planner can judge it directly.
   spatialJoinRadiusMeters: Number(process.env.SPATIAL_JOIN_RADIUS_METERS) || 400,
+
+  // Radius for matching a 511NY event to a geocoded AADT station. Same
+  // default as the count join, and for the same reason (the station geocode
+  // itself is only road-accurate). 511 events are point-located at one end of
+  // what may be a long work zone, so this is deliberately not tighter.
+  eventMatchRadiusMeters: Number(process.env.EVENT_MATCH_RADIUS_METERS) || 400,
+
+  // 511NY events change through the day (incidents open/clear), so this is a
+  // much shorter TTL than the two historical datasets' 1 hour.
+  eventsCacheTtlMs: Number(process.env.EVENTS_CACHE_TTL_MS) || 5 * 60 * 1000, // 5m
 
   // On-disk caches (gitignored)
   dataDir: path.join(__dirname, '..', 'data'),

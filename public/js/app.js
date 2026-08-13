@@ -83,12 +83,25 @@ async function loadSegments() {
   const data = await res.json();
   state.segments = data.segments;
   assignPriorityTiers(state.segments);
-  renderStats(data.summary, data.geocodeProgress);
+  renderStats(data.summary, data.geocodeProgress, data.eventFeed);
   renderTable(state.segments);
   if (state.map) renderMapMarkers(state.segments);
 }
 
-function renderStats(summary, geocodeProgress) {
+function renderStats(summary, geocodeProgress, eventFeed) {
+  const eventTile =
+    eventFeed && eventFeed.status === 'ok'
+      ? `<div class="stat-tile">
+      <div class="value">${summary.explainedByLiveEventsCount ?? 0}</div>
+      <div class="label">Deviations explained by an active 511NY event</div>
+      <div class="sublabel">${eventFeed.activeNycEvents} active events in NYC right now</div>
+    </div>`
+      : `<div class="stat-tile">
+      <div class="value">—</div>
+      <div class="label">511NY event feed unavailable</div>
+      <div class="sublabel">deviations not checked against work zones${eventFeed?.message ? ` (${eventFeed.message})` : ''}</div>
+    </div>`;
+
   els.statTiles.innerHTML = `
     <div class="stat-tile">
       <div class="value">${summary.total}</div>
@@ -103,6 +116,7 @@ function renderStats(summary, geocodeProgress) {
       <div class="label">Stale entries w/ significant unexplained deviation</div>
       <div class="sublabel">of the stale subset</div>
     </div>
+    ${eventTile}
   `;
   if (geocodeProgress && geocodeProgress.totalUniqueStations > 0) {
     const pct = Math.round((geocodeProgress.geocodedCount / geocodeProgress.totalUniqueStations) * 100);
@@ -132,6 +146,17 @@ function spatialMatchLabel(s) {
   }
 }
 
+// Compact in-table marker for a deviation that 511 attributes to a work zone
+// or closure. Worth surfacing in the list (not just the drawer) because these
+// segments have had their priority_score cut to 25% — the reason they're
+// ranked lower than their raw deviation suggests should be visible.
+function eventTagHtml(s) {
+  if (!s.explanation || !s.explanation.startsWith('511NY:')) return '';
+  const subtype = s.liveEvents?.events?.[0]?.eventSubType || 'active event';
+  const extra = s.liveEvents?.matchedCount > 1 ? ` +${s.liveEvents.matchedCount - 1}` : '';
+  return `<div class="confidence-tag">511: ${subtype}${extra}</div>`;
+}
+
 function renderTable(segments) {
   if (segments.length === 0) {
     els.segmentsBody.innerHTML = '';
@@ -150,7 +175,7 @@ function renderTable(segments) {
       <td>${s.confidence.trendConfidence}${s.confidence.isLongExtrapolation ? '<div class="confidence-tag">long extrapolation</div>' : ''}</td>
       <td class="num">${fmtNum(s.aadtExpectedCurrent)}</td>
       <td class="num">${fmtNum(s.aadtRecentEstimate)}${s.confidence.isShortCountEstimate ? '<div class="confidence-tag">short count</div>' : ''}</td>
-      <td class="num">${fmtPct(s.deviationPct)}${s.isDeviationSignificant ? '<div class="confidence-tag">significant</div>' : ''}</td>
+      <td class="num">${fmtPct(s.deviationPct)}${s.isDeviationSignificant ? '<div class="confidence-tag">significant</div>' : ''}${eventTagHtml(s)}</td>
       <td>${spatialMatchLabel(s)}</td>
     </tr>`
     )
@@ -224,6 +249,14 @@ async function openDetail(county, stationId, tier) {
   els.drawerContent.innerHTML = `
     <h2>${s.roadName || s.stateRoute || 'Station ' + s.stationId}</h2>
     <div class="sub">Station ${s.stationId} • ${s.municipality || s.county}, ${s.county} County</div>
+    ${
+      s.officialDashboardUrl
+        ? `<a class="official-link" href="${s.officialDashboardUrl}" target="_blank" rel="noopener noreferrer">
+             Open NYSDOT Site Dashboard ↗
+             <span>current-year AADT trend, hourly &amp; daily volume — newer than any figure below</span>
+           </a>`
+        : ''
+    }
 
     <div class="section">
       <h3>Priority</h3>
@@ -255,7 +288,7 @@ async function openDetail(county, stationId, tier) {
         <div><span class="k">Recent NYC estimate</span><span class="v">${fmtNum(s.aadtRecentEstimate)}</span></div>
         <div><span class="k">Deviation</span><span class="v">${fmtPct(s.deviationPct)}</span></div>
         <div><span class="k">Significant?</span><span class="v">${s.isDeviationSignificant == null ? 'n/a' : s.isDeviationSignificant ? 'yes' : 'no'}</span></div>
-        <div><span class="k">Explained?</span><span class="v">${s.isExplained ? 'yes' : 'no'}</span></div>
+        <div><span class="k">Explained?</span><span class="v">${s.isExplained ? `yes — ${s.explanation ?? 'reason unavailable'}` : 'no'}</span></div>
         <div><span class="k">Single-ever count?</span><span class="v">${s.isSingleEverCount ? 'yes — refresh candidate regardless of deviation' : 'no'}</span></div>
       </div>
     </div>
@@ -263,6 +296,11 @@ async function openDetail(county, stationId, tier) {
     <div class="section">
       <h3>Spatial match</h3>
       <p style="margin:0; font-size:12.5px; color:var(--text-secondary);">${spatialMatchLabel(s)}${s.stationLocation?.confidence ? ` — geocode confidence: ${s.stationLocation.confidence}` : ''}</p>
+    </div>
+
+    <div class="section">
+      <h3>Known events nearby (511NY)</h3>
+      ${renderLiveEvents(s.liveEvents)}
     </div>
 
     <div class="section">
@@ -277,6 +315,47 @@ async function openDetail(county, stationId, tier) {
     nycEstimate: s.nycEstimate,
     currentYear: new Date().getFullYear(),
   });
+}
+
+function fmtEventDate(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function renderLiveEvents(le) {
+  const muted = 'color:var(--text-muted); font-size:12.5px;';
+  if (!le) return `<p style="${muted}">No event data for this segment.</p>`;
+  if (le.status === 'unavailable')
+    return `<p style="${muted}">511NY event feed unavailable — this segment's deviation was not checked against known work zones.</p>`;
+  if (le.status === 'station-not-located')
+    return `<p style="${muted}">Station not yet geocoded, so nearby events can't be matched.</p>`;
+  if (le.status === 'not-applicable-outside-nyc')
+    return `<p style="${muted}">Outside NYC — event matching is scoped to the five boroughs.</p>`;
+  if (le.matchedCount === 0)
+    return `<p style="${muted}">No active 511NY events within the match radius. A deviation here has no known roadway cause.</p>`;
+
+  const rows = le.events
+    .map((e) => {
+      const window = e.isOpenEnded
+        ? `since ${fmtEventDate(e.startDate) ?? 'unknown'} — no planned end date`
+        : `${fmtEventDate(e.startDate) ?? '?'} → ${fmtEventDate(e.plannedEndDate) ?? '?'}`;
+      return `
+      <div class="event-item">
+        <div class="event-head">
+          <strong>${e.eventSubType || e.eventType}</strong>
+          <span class="confidence-tag">${e.distanceMeters}m${e.isExplanatory ? '' : ' • context only'}</span>
+        </div>
+        <div style="${muted}">${e.roadway || ''}${e.direction ? ` — ${e.direction}` : ''} • ${window}</div>
+        <div style="font-size:12.5px; color:var(--text-secondary); margin-top:3px;">${e.description || ''}</div>
+      </div>`;
+    })
+    .join('');
+
+  const more =
+    le.matchedCount > le.events.length
+      ? `<p style="${muted}">…and ${le.matchedCount - le.events.length} more within the radius.</p>`
+      : '';
+  return rows + more;
 }
 
 function renderLiveConditions(lc) {
