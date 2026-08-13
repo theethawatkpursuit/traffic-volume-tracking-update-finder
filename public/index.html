@@ -17,6 +17,80 @@
   </header>
 
   <main>
+    <details class="glossary">
+      <summary>What do these numbers mean?</summary>
+      <div class="glossary-body">
+        <div class="glossary-group">
+          <h4>Top stats</h4>
+          <dl>
+            <dt>Segments in scope</dt>
+            <dd>How many stations match the current filters.</dd>
+            <dt>Older than 5 years</dt>
+            <dd>Share of those stations whose last real AADT reading is more than 5 years old.</dd>
+            <dt>Stale w/ significant unexplained deviation</dt>
+            <dd>Of the stale ones, the share whose recent count differs meaningfully from the historical trend <em>and</em> has no known cause. The closest thing here to "needs attention now."</dd>
+            <dt>511NY events</dt>
+            <dd>How many of the shown deviations line up with an active work zone or closure nearby, plus how many such events are live in NYC right now.</dd>
+          </dl>
+        </div>
+
+        <div class="glossary-group">
+          <h4>Filters</h4>
+          <dl>
+            <dt>County</dt>
+            <dd>Defaults to all 5 NYC boroughs, the only scope where a recent-count comparison is possible. Other counties show AADT history only.</dd>
+            <dt>Min age / Min |deviation|</dt>
+            <dd>Hide anything younger, or closer to the historical trend, than the value you set.</dd>
+            <dt>Trend confidence</dt>
+            <dd>How much data backs the historical trend line — see below.</dd>
+          </dl>
+        </div>
+
+        <div class="glossary-group">
+          <h4>Table columns</h4>
+          <dl>
+            <dt>Priority</dt>
+            <dd>
+              Critical / Serious / Watch / Low — a <em>relative</em> ranking among what's currently shown, not a fixed scale. Re-sorts if you change the filters. Based on a priority score:
+              <code class="formula">priority score = age (yrs) × |deviation %| × (0.25 if explained, else 1)</code>
+            </dd>
+            <dt>Station</dt>
+            <dd>The NYSDOT AADT station ID; the small tag below it is how many distinct years of readings its trend is built from.</dd>
+            <dt>Age (yrs)</dt>
+            <dd>Years since that station's last real reading — the core "staleness" signal.</dd>
+            <dt>Trend confidence</dt>
+            <dd><strong>High</strong>: 4+ clean readings. <strong>Low</strong>: 2–3 readings, or a projection stretched years past the last one. <strong>None</strong>: 0–1 readings. Lower confidence means the "expected AADT" below is a weaker baseline.</dd>
+            <dt>Expected AADT</dt>
+            <dd>The historical trend line, projected forward to the current year.</dd>
+            <dt>Recent est.</dt>
+            <dd>Average daily volume from NYC's own automated counters near this station. "Short count" means it's based on fewer than 7 observed days — a thinner sample.</dd>
+            <dt>Deviation</dt>
+            <dd>
+              % difference between the recent estimate and the expected AADT:
+              <code class="formula">deviation % = (recent est. − expected AADT) ÷ expected AADT × 100</code>
+              "Significant" means it clears the threshold. A "511:" tag means an active event nearby may explain it, which quarters how much that deviation counts toward priority.
+            </dd>
+            <dt>Spatial match</dt>
+            <dd>The distance and street name of the NYC counter matched to this station, or why none was found. Distances can run a few hundred meters, since station locations are estimated from road-name text, not exact coordinates.</dd>
+          </dl>
+        </div>
+
+        <div class="glossary-group">
+          <h4>Map &amp; detail view</h4>
+          <dl>
+            <dt>Marker color</dt>
+            <dd>Same priority tier as the list. Position is the station's estimated location.</dd>
+            <dt>Known events nearby (511NY)</dt>
+            <dd>Active roadwork, closures, or incidents from NYSDOT's 511 feed within range of this station.</dd>
+            <dt>Live conditions (TomTom)</dt>
+            <dd>Current vs. free-flow speed and congestion, fetched live only when you open a station — never for the whole list at once.</dd>
+            <dt>Official NYSDOT Site Dashboard</dt>
+            <dd>Links out to NYSDOT's own current-year data for this station — newer than anything computed on this page.</dd>
+          </dl>
+        </div>
+      </div>
+    </details>
+
     <div class="stat-tiles" id="statTiles"></div>
 
     <div class="filters">
