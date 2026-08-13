@@ -39,6 +39,39 @@ function requireEnv(name) {
   return value;
 }
 
+/**
+ * Defers validation of a credential block until something actually reads it,
+ * instead of failing the whole module (and everything that transitively
+ * requires it) at import time over a key an entrypoint may never need.
+ *
+ * This matters because `config.js` is one shared module behind very different
+ * call graphs: the request server needs all four credential sets, but
+ * `scripts/build-snapshot.js` only ever touches `openNy` and `nycOpenData` —
+ * yet because `socrata.js` requires `config` at load time, a single missing
+ * TOMTOM_API_KEY used to throw before build-snapshot's own code ran at all,
+ * failing the Vercel build even though the build never uses TomTom.
+ *
+ * It also matches how tomtomService and fiveElevenService already behave:
+ * both read `config.tomtom` / `config.fiveEleven` only inside their
+ * request-time functions, never at module load, because those APIs are
+ * queried on demand per opened segment — never in bulk. A lazy getter makes
+ * the *validation* on-demand too, so a deployment missing an optional
+ * integration's key still serves everything that doesn't depend on it, and
+ * only fails the one feature that actually needs the missing key, at the
+ * moment it's used.
+ */
+function lazy(build) {
+  let value;
+  let computed = false;
+  return () => {
+    if (!computed) {
+      value = build();
+      computed = true;
+    }
+    return value;
+  };
+}
+
 // The .env file ships pre-baked Socrata v3 "query.json" URLs scoped to one
 // specific dataset each (and, for AADT, with a fixed SELECT already embedded).
 // That shape can't be reused as a generic "base + dataset id" pair the way the
@@ -53,35 +86,9 @@ function originOf(url) {
 
 const currentYear = new Date().getFullYear();
 
-module.exports = {
+const config = {
   port: process.env.PORT || 3000,
   currentYear,
-
-  tomtom: {
-    apiKey: requireEnv('TOMTOM_API_KEY'),
-    baseUrl: requireEnv('TOMTOM_BASE_URL'),
-  },
-
-  openNy: {
-    origin: originOf(requireEnv('OPEN_NY_BASE_URL')),
-    datasetId: requireEnv('OPEN_NY_AADT_DATASET_ID'),
-    appToken: requireEnv('OPEN_NY_APP_TOKEN'),
-  },
-
-  nycOpenData: {
-    origin: originOf(requireEnv('NY_OPEN_DATA_BASE_URL')),
-    datasetId: requireEnv('NYC_TRAFFIC_VOLUME_DATASET_ID'),
-    appToken: requireEnv('NY_OPEN_DATA_APP_TOKEN'),
-  },
-
-  // 511NY event feed. Unlike the two Socrata URLs above, this one is a plain
-  // API root — the endpoint name, key and format are query params appended at
-  // request time (see fiveElevenService), so the key never lives inside a URL
-  // string that could end up in a log line.
-  fiveEleven: {
-    baseUrl: requireEnv('FIVE_ELEVEN_BASE_URL').replace(/\/+$/, ''),
-    apiKey: requireEnv('FIVE_ELEVEN_API_KEY'),
-  },
 
   apiTimeoutMs: Number(process.env.API_TIMEOUT_MS) || 15000,
 
@@ -146,3 +153,47 @@ module.exports = {
     (process.env.ENABLE_GEOCODE_WARMUP !== 'false' && dataDirIsPersistent),
   datasetCacheTtlMs: Number(process.env.DATASET_CACHE_TTL_MS) || 60 * 60 * 1000, // 1h
 };
+
+// Credential blocks — validated lazily, on first access, per the reasoning
+// above `lazy()`. `enumerable: true` keeps them showing up in `Object.keys`/
+// JSON.stringify like a plain property would, for anything that introspects
+// the config object.
+Object.defineProperty(config, 'openNy', {
+  enumerable: true,
+  get: lazy(() => ({
+    origin: originOf(requireEnv('OPEN_NY_BASE_URL')),
+    datasetId: requireEnv('OPEN_NY_AADT_DATASET_ID'),
+    appToken: requireEnv('OPEN_NY_APP_TOKEN'),
+  })),
+});
+
+Object.defineProperty(config, 'nycOpenData', {
+  enumerable: true,
+  get: lazy(() => ({
+    origin: originOf(requireEnv('NY_OPEN_DATA_BASE_URL')),
+    datasetId: requireEnv('NYC_TRAFFIC_VOLUME_DATASET_ID'),
+    appToken: requireEnv('NY_OPEN_DATA_APP_TOKEN'),
+  })),
+});
+
+Object.defineProperty(config, 'tomtom', {
+  enumerable: true,
+  get: lazy(() => ({
+    apiKey: requireEnv('TOMTOM_API_KEY'),
+    baseUrl: requireEnv('TOMTOM_BASE_URL'),
+  })),
+});
+
+// 511NY event feed. Unlike the two Socrata URLs above, this one is a plain API
+// root — the endpoint name, key and format are query params appended at
+// request time (see fiveElevenService), so the key never lives inside a URL
+// string that could end up in a log line.
+Object.defineProperty(config, 'fiveEleven', {
+  enumerable: true,
+  get: lazy(() => ({
+    baseUrl: requireEnv('FIVE_ELEVEN_BASE_URL').replace(/\/+$/, ''),
+    apiKey: requireEnv('FIVE_ELEVEN_API_KEY'),
+  })),
+});
+
+module.exports = config;
