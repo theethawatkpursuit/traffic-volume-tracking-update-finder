@@ -8,13 +8,27 @@ const FIELDS =
   'aadt_year, station_id, county, signing, state_route, county_road, road_name, ' +
   'beginning_description, ending_description, municipality, length, fc, ramp, bridge, rr_xing, oneway, count';
 
+const countyWhere = (county) => `county='${county.replace(/'/g, "''")}'`;
+
+/** How many raw AADT rows a county has, for progress reporting. Null if unavailable. */
+async function countCountyRows(county) {
+  try {
+    return await client.count({ where: countyWhere(county) });
+  } catch {
+    return null; // progress detail only — never fail the real fetch over it
+  }
+}
+
 /** Fetches every raw AADT row for one county. */
-async function fetchCountyRows(county) {
-  const rows = await client.queryAll({
-    select: FIELDS,
-    where: `county='${county.replace(/'/g, "''")}'`,
-    order: 'station_id, aadt_year',
-  });
+async function fetchCountyRows(county, { onPage } = {}) {
+  const rows = await client.queryAll(
+    {
+      select: FIELDS,
+      where: countyWhere(county),
+      order: 'station_id, aadt_year',
+    },
+    { onPage }
+  );
   return rows;
 }
 
@@ -71,4 +85,4 @@ function buildStationTrends(rows, currentYear = config.currentYear) {
   return stations;
 }
 
-module.exports = { fetchCountyRows, buildStationTrends, FIELDS };
+module.exports = { fetchCountyRows, countCountyRows, buildStationTrends, FIELDS };

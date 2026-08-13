@@ -53,15 +53,34 @@ class SocrataClient {
   }
 
   /**
+   * Total rows a `where` clause will return. One cheap server-side aggregate,
+   * used to turn a long paged fetch into a real percentage instead of a
+   * spinner — without it the caller can't know how far through it is, because
+   * paging only ends when a short page arrives.
+   */
+  async count({ where } = {}) {
+    const data = await this.query({ select: 'count(*) as n', where, limit: 1 });
+    const n = Number(data?.[0]?.n);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
    * Pages through the full result set for a query, respecting Socrata's
    * per-request row cap, and returns every row concatenated.
    */
-  async queryAll({ select, where, order, group } = {}, { maxPages = MAX_PAGES_SAFETY_CAP } = {}) {
+  async queryAll(
+    { select, where, order, group } = {},
+    { maxPages = MAX_PAGES_SAFETY_CAP, onPage } = {}
+  ) {
     const rows = [];
     let offset = 0;
     for (let page = 0; page < maxPages; page++) {
       const batch = await this.query({ select, where, order, group, limit: MAX_PAGE_SIZE, offset });
       rows.push(...batch);
+      // Lets a caller report how far a long paged fetch has got. The total page
+      // count isn't knowable until the last short page arrives, so this reports
+      // rows so far rather than a fraction.
+      onPage?.({ rowsSoFar: rows.length, page: page + 1 });
       if (batch.length < MAX_PAGE_SIZE) break;
       offset += MAX_PAGE_SIZE;
     }

@@ -11,15 +11,18 @@ const client = new SocrataClient(config.nycOpenData);
  * raw hourly/15-min rows for the lookback window would be ~270k rows;
  * grouped, it's a few thousand.
  */
-async function fetchRecentDailyTotals({ sinceYear } = {}) {
+async function fetchRecentDailyTotals({ sinceYear, onPage } = {}) {
   const since = sinceYear ?? config.currentYear - config.nycCountsLookbackYears;
   const fields = 'segmentid, direction, yr, m, d, street, fromst, tost, boro, wktgeom';
-  const rows = await client.queryAll({
-    select: `${fields}, sum(vol) as daily_vol`,
-    where: `yr >= ${since}`,
-    order: 'segmentid, direction, yr, m, d',
-    group: fields,
-  });
+  const rows = await client.queryAll(
+    {
+      select: `${fields}, sum(vol) as daily_vol`,
+      where: `yr >= ${since}`,
+      order: 'segmentid, direction, yr, m, d',
+      group: fields,
+    },
+    { onPage }
+  );
 
   return rows.map((r) => ({
     segmentId: r.segmentid,

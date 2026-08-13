@@ -2,6 +2,7 @@ const express = require('express');
 const repo = require('../services/segmentsRepository');
 const tomtomService = require('../services/tomtomService');
 const fiveElevenService = require('../services/fiveElevenService');
+const progress = require('../services/progressTracker');
 
 const router = express.Router();
 
@@ -10,6 +11,13 @@ router.get('/counties', (req, res) => {
     nycCounties: repo.NYC_COUNTIES,
     allCounties: repo.ALL_NY_COUNTIES,
   });
+});
+
+// Polled by the client while a /segments request is in flight, so the loading
+// bar reflects work the server has actually finished. Returns null when no
+// load is running for that scope (already cached, or nothing started yet).
+router.get('/segments/progress', (req, res) => {
+  res.json(progress.get(progress.jobKey(req.query.county || undefined)));
 });
 
 router.get('/segments', async (req, res, next) => {

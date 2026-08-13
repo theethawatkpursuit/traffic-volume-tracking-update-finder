@@ -181,11 +181,24 @@ function renderTrendChart(container, { history, trend, nycEstimate, currentYear 
     crosshair.setAttribute('x1', x(nearest.year));
     crosshair.setAttribute('x2', x(nearest.year));
     crosshair.style.display = 'block';
-    tooltip.style.display = 'block';
-    tooltip.style.left = `${x(nearest.year) + 10}px`;
-    tooltip.style.top = `${y(nearest.value) - 10}px`;
+
+    // Content first, position second — the tooltip has to be rendered with its
+    // final text before offsetWidth means anything.
     const kindLabel = { observed: 'Observed AADT', projected: 'Projected (expected) AADT', recent: 'Recent NYC estimate' }[nearest.kind];
     tooltip.innerHTML = `<strong>${nearest.year}</strong><br>${kindLabel}: ${Math.round(nearest.value).toLocaleString()}`;
+    tooltip.style.display = 'block';
+
+    // The current-year points (projected AADT and the recent NYC estimate) sit
+    // at the far right of the chart, so a tooltip always drawn to the right of
+    // the point runs past the drawer edge and can't be read. Flip it to the
+    // left of the crosshair whenever it wouldn't fit, and keep it inside the
+    // chart vertically.
+    const pointX = x(nearest.year);
+    const tipW = tooltip.offsetWidth;
+    const tipH = tooltip.offsetHeight;
+    const placeLeft = pointX + 10 + tipW > width;
+    tooltip.style.left = `${Math.max(0, placeLeft ? pointX - 10 - tipW : pointX + 10)}px`;
+    tooltip.style.top = `${Math.min(Math.max(0, y(nearest.value) - 10), height - tipH)}px`;
   });
   hitRect.addEventListener('mouseleave', () => {
     crosshair.style.display = 'none';

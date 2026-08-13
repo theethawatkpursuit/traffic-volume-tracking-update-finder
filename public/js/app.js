@@ -14,6 +14,10 @@ const els = {
   segmentsBody: document.getElementById('segmentsBody'),
   emptyState: document.getElementById('emptyState'),
   geocodeNote: document.getElementById('geocodeNote'),
+  loadProgress: document.getElementById('loadProgress'),
+  loadProgressFill: document.getElementById('loadProgressFill'),
+  loadProgressLabel: document.getElementById('loadProgressLabel'),
+  loadProgressPct: document.getElementById('loadProgressPct'),
   listView: document.getElementById('listView'),
   mapView: document.getElementById('mapView'),
   viewListBtn: document.getElementById('viewListBtn'),
@@ -77,15 +81,66 @@ function buildQuery() {
   return params.toString();
 }
 
+// ---- Load progress ----
+// The bar tracks units of work the server reports as finished (one per county,
+// plus the shared NYC counts aggregation, the 511 event fetch and the scoring
+// pass) rather than animating on a timer, so the percentage means something.
+// Long single units — a county's AADT paging — would otherwise look stuck, so
+// the server also streams a live row count as a sub-label.
+const PROGRESS_POLL_MS = 400;
+const PROGRESS_SHOW_AFTER_MS = 300; // don't flash the bar on a cached, instant load
+
+function setProgress(pct, label) {
+  els.loadProgressFill.style.width = `${pct}%`;
+  els.loadProgressPct.textContent = `${pct}%`;
+  els.loadProgressLabel.textContent = label;
+}
+
+function startProgressPolling() {
+  const county = els.countySelect.value;
+  const query = county ? `?county=${encodeURIComponent(county)}` : '';
+  let shown = false;
+
+  const showTimer = setTimeout(() => {
+    shown = true;
+    setProgress(0, 'Contacting data sources…');
+    els.loadProgress.hidden = false;
+  }, PROGRESS_SHOW_AFTER_MS);
+
+  const poll = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/segments/progress${query}`);
+      const p = await res.json();
+      if (!p || !shown) return;
+      setProgress(p.pct, p.detail || p.label);
+    } catch {
+      // A failed poll is cosmetic — the real request is still running.
+    }
+  }, PROGRESS_POLL_MS);
+
+  return function stop() {
+    clearTimeout(showTimer);
+    clearInterval(poll);
+    if (shown) setProgress(100, 'Done');
+    // Let the finished bar register before it disappears.
+    setTimeout(() => { els.loadProgress.hidden = true; }, shown ? 400 : 0);
+  };
+}
+
 async function loadSegments() {
   els.segmentsBody.innerHTML = `<tr><td colspan="9" class="loading-inline">Loading… (first load per county can take a while — the AADT dataset is paged from the source API)</td></tr>`;
-  const res = await fetch(`/api/segments?${buildQuery()}`);
-  const data = await res.json();
-  state.segments = data.segments;
-  assignPriorityTiers(state.segments);
-  renderStats(data.summary, data.geocodeProgress, data.eventFeed);
-  renderTable(state.segments);
-  if (state.map) renderMapMarkers(state.segments);
+  const stopProgress = startProgressPolling();
+  try {
+    const res = await fetch(`/api/segments?${buildQuery()}`);
+    const data = await res.json();
+    state.segments = data.segments;
+    assignPriorityTiers(state.segments);
+    renderStats(data.summary, data.geocodeProgress, data.eventFeed);
+    renderTable(state.segments);
+    if (state.map) renderMapMarkers(state.segments);
+  } finally {
+    stopProgress();
+  }
 }
 
 function renderStats(summary, geocodeProgress, eventFeed) {
@@ -122,7 +177,7 @@ function renderStats(summary, geocodeProgress, eventFeed) {
     const pct = Math.round((geocodeProgress.geocodedCount / geocodeProgress.totalUniqueStations) * 100);
     els.geocodeNote.textContent =
       pct < 100
-        ? `Spatial-match geocoding in progress: ${geocodeProgress.geocodedCount}/${geocodeProgress.totalUniqueStations} AADT stations located (${pct}%). Unmatched stations will gain deviation data as this completes in the background.`
+        ? `Spatial-match geocoding in progress: ${geocodeProgress.geocodedCount}/${geocodeProgress.totalUniqueStations} AADT stations located (${pct}%). Only stations matched to a recent NYC count are listed, so more will appear as this completes in the background.`
         : `All ${geocodeProgress.totalUniqueStations} AADT stations in scope have been geocoded for spatial matching.`;
   } else {
     els.geocodeNote.textContent = '';

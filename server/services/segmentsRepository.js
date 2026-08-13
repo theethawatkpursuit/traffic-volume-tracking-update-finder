@@ -3,6 +3,8 @@ const aadtService = require('./aadtService');
 const nycCountsService = require('./nycCountsService');
 const geocodeService = require('./geocodeService');
 const fiveElevenService = require('./fiveElevenService');
+const datasetCache = require('./datasetCache');
+const progress = require('./progressTracker');
 const { joinStationsToCounts, COUNTY_TO_BOROUGH } = require('./spatialJoin');
 const { computeDeviation } = require('../services/deviationEngine');
 const { siteDashboardUrl } = require('../utils/nysdotLinks');
@@ -19,34 +21,86 @@ const ALL_NY_COUNTIES = [
   'Washington', 'Wayne', 'Westchester', 'Wyoming', 'Yates',
 ];
 
+// Two-level caching. The in-memory Maps stay the hot path; datasetCache is a
+// disk layer beneath them so a process restart doesn't re-page the ~290k-row
+// AADT query and the grouped NYC counts aggregation before the first request
+// can be served. Both levels share `datasetCacheTtlMs`.
 const countyCache = new Map(); // county -> { stations, loadedAt }
 let nycCountsCache = null; // { estimates, index, loadedAt }
 let geocodeWarmupTimer = null;
 
-async function getNycCountEstimates() {
+const NYC_COUNTS_CACHE_KEY = 'nycCounts';
+const countyCacheKey = (county) => `county:${county}`;
+
+async function getNycCountEstimates(jobKey) {
+  const done = () => progress.completeUnit(jobKey, 'nycCounts', 'NYC volume counts ready');
+  // Grouped aggregation — no countable total, so the bar leans on how long
+  // this took last time.
+  progress.beginUnit(jobKey, 'nycCounts', datasetCache.getTiming('nycCounts'));
+
   if (nycCountsCache && Date.now() - nycCountsCache.loadedAt < config.datasetCacheTtlMs) {
+    done();
     return nycCountsCache;
   }
-  const dailyRows = await nycCountsService.fetchRecentDailyTotals();
+
+  const persisted = datasetCache.get(NYC_COUNTS_CACHE_KEY);
+  if (persisted) {
+    nycCountsCache = { estimates: persisted, loadedAt: Date.now() };
+    done();
+    return nycCountsCache;
+  }
+
+  const dailyRows = await nycCountsService.fetchRecentDailyTotals({
+    onPage: ({ rowsSoFar }) =>
+      progress.detail(jobKey, `NYC volume counts — ${rowsSoFar.toLocaleString()} daily totals`),
+  });
   const estimates = nycCountsService.estimateAadtFromDailyTotals(dailyRows);
   nycCountsCache = { estimates, loadedAt: Date.now() };
+  datasetCache.set(NYC_COUNTS_CACHE_KEY, estimates);
+  done();
   return nycCountsCache;
 }
 
-async function getCountyStations(county) {
+async function getCountyStations(county, jobKey) {
+  const done = () => progress.completeUnit(jobKey, countyCacheKey(county), `${county} loaded`);
+  progress.beginUnit(jobKey, countyCacheKey(county), datasetCache.getTiming(countyCacheKey(county)));
+
   const cached = countyCache.get(county);
   if (cached && Date.now() - cached.loadedAt < config.datasetCacheTtlMs) {
+    done();
     return cached.stations;
   }
-  const rows = await aadtService.fetchCountyRows(county);
+
+  const persisted = datasetCache.get(countyCacheKey(county));
+  if (persisted) {
+    countyCache.set(county, { stations: persisted, loadedAt: Date.now() });
+    done();
+    return persisted;
+  }
+
+  // Ask how many rows this county has before paging, so the long fetch reports
+  // a real fraction rather than sitting at 0% for most of a cold load. One
+  // cheap aggregate against a query we're about to run anyway.
+  const expectedRows = await aadtService.countCountyRows(county);
+  const rows = await aadtService.fetchCountyRows(county, {
+    onPage: ({ rowsSoFar }) => {
+      const of = expectedRows ? ` of ${expectedRows.toLocaleString()}` : '';
+      progress.detail(jobKey, `${county} AADT — ${rowsSoFar.toLocaleString()}${of} rows`);
+      if (expectedRows) {
+        progress.setUnitFraction(jobKey, countyCacheKey(county), rowsSoFar / expectedRows);
+      }
+    },
+  });
   const stations = aadtService.buildStationTrends(rows);
   countyCache.set(county, { stations, loadedAt: Date.now() });
+  datasetCache.set(countyCacheKey(county), stations);
+  done();
   return stations;
 }
 
 /** Builds the fully-joined + scored segment list for a county. */
-async function buildCountySegments(county) {
-  const stations = await getCountyStations(county);
+async function buildCountySegments(county, jobKey) {
+  const stations = await getCountyStations(county, jobKey);
   const isNycCounty = NYC_COUNTIES.includes(county);
 
   let estimatesBySegmentDirection = new Map();
@@ -58,7 +112,7 @@ async function buildCountySegments(county) {
   let countyEvents = [];
   let eventFeedStatus = 'not-applicable-outside-nyc';
   if (isNycCounty) {
-    const { estimates } = await getNycCountEstimates();
+    const { estimates } = await getNycCountEstimates(jobKey);
     for (const e of estimates) {
       estimatesBySegmentDirection.set(`${e.segmentId}|${e.direction}`, e);
     }
@@ -68,6 +122,7 @@ async function buildCountySegments(county) {
     const eventIndex = await fiveElevenService.getNycEventIndex();
     countyEvents = eventIndex.byCounty.get(county) ?? [];
     eventFeedStatus = eventIndex.status;
+    progress.completeUnit(jobKey, 'events', 'Live 511NY events matched');
   }
 
   return stations.map((station) => {
@@ -147,9 +202,43 @@ async function listSegments({
   confidenceLevel,
 } = {}) {
   const counties = county ? [county] : NYC_COUNTIES; // default scope: the five NYC boroughs (strongest coverage)
-  const all = (await Promise.all(counties.map(buildCountySegments))).flat();
 
-  let filtered = all;
+  // One unit per county, plus the two shared NYC steps (counts aggregation,
+  // 511 events) when any NYC county is in scope, plus the final scoring pass.
+  const isNycScope = counties.some((c) => NYC_COUNTIES.includes(c));
+  const key = progress.jobKey(county);
+  progress.start(key, counties.length + (isNycScope ? 2 : 0) + 1);
+
+  try {
+    const all = (await Promise.all(counties.map((c) => buildCountySegments(c, key)))).flat();
+    return finalizeSegments(all, { ageThresholdYears, deviationThresholdPct, confidenceLevel, key });
+  } finally {
+    // Feed measured step durations back to disk so the next cold load's bar is
+    // calibrated against this machine and connection, not a guess.
+    for (const [unitId, ms] of Object.entries(progress.durations(key))) {
+      datasetCache.setTiming(unitId, ms);
+    }
+    progress.finish(key);
+  }
+}
+
+/** Filtering, sorting and the final scoring progress unit. */
+function finalizeSegments(all, { ageThresholdYears, deviationThresholdPct, confidenceLevel, key }) {
+
+  // Only surface segments that yield a real measured deviation. Without one a
+  // row ranks on age alone (the 'age-only' priorityBasis in deviationEngine),
+  // which is a much weaker claim than "this count is measurably out of date"
+  // and shows as a blank deviation column.
+  //
+  // Scoped to counties where a recent NYC count is possible at all: the 57
+  // non-NYC counties have no comparable source by definition, so applying this
+  // there would empty those views entirely rather than filter them.
+  let filtered = all.filter(
+    (s) =>
+      s.spatialMatchStatus === 'not-applicable-outside-nyc' ||
+      (s.aadtRecentEstimate != null && s.deviationPct != null)
+  );
+
   if (ageThresholdYears != null) {
     filtered = filtered.filter((s) => (s.confidence.ageYears ?? 0) >= Number(ageThresholdYears));
   }
@@ -162,6 +251,7 @@ async function listSegments({
   }
 
   filtered.sort((a, b) => b.priorityScore - a.priorityScore);
+  progress.completeUnit(key, 'scoring', 'Scored and ranked');
   return filtered;
 }
 
@@ -210,7 +300,9 @@ function startGeocodeWarmup({ batchSize = 50, pauseMs = 3000 } = {}) {
 
   async function runBatch() {
     try {
-      const allNycStations = (await Promise.all(NYC_COUNTIES.map(getCountyStations))).flat();
+      // Explicit arrow: a bare `.map(getCountyStations)` would pass the array
+      // index as the second argument, which is now the progress job key.
+      const allNycStations = (await Promise.all(NYC_COUNTIES.map((c) => getCountyStations(c)))).flat();
       const { geocoded } = await geocodeService.warmupBatch(allNycStations, batchSize);
       if (geocoded === 0) {
         console.log('[geocode-warmup] complete — all NYC-county AADT stations geocoded.');
@@ -239,7 +331,7 @@ async function geocodeProgressForScope(county) {
   const counties = county ? [county] : NYC_COUNTIES;
   const relevant = counties.filter((c) => NYC_COUNTIES.includes(c));
   if (relevant.length === 0) return { totalUniqueStations: 0, geocodedCount: 0 };
-  const stations = (await Promise.all(relevant.map(getCountyStations))).flat();
+  const stations = (await Promise.all(relevant.map((c) => getCountyStations(c)))).flat();
   return geocodeService.cacheStats(stations);
 }
 
