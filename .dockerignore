@@ -1,0 +1,23 @@
+# Secrets must never enter an image layer — they are supplied as environment
+# variables by the host at runtime. A committed .env inside a built image stays
+# readable in the layer history even if a later layer deletes it.
+.env
+.env.*
+!.env.example
+
+# Installed inside the image by `npm ci`; copying the host's copy would
+# overwrite that with whatever platform-specific binaries were built locally.
+node_modules/
+
+# Local caches — the container writes its own to the mounted volume at DATA_DIR.
+# Copying a stale local dataset cache into the image would ship 2019 data as if
+# it were fresh and mask a broken upstream fetch.
+data/
+
+.git/
+.gitignore
+test/
+*.log
+.DS_Store
+README.md
+vercel.json

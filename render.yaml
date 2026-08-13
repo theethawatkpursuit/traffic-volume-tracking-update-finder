@@ -1,0 +1,64 @@
+# Render Blueprint — one-click deploy of the persistent-process setup.
+#
+# Render → New → Blueprint → point at this repo. Render reads this file, builds
+# the Dockerfile, attaches the disk, and prompts for the secrets marked
+# `sync: false` (they are deliberately not stored in the repo).
+#
+# The disk is the point: it makes DATA_DIR persistent, so the dataset cache and
+# the geocoded AADT station coordinates survive restarts and redeploys. Without
+# it the app still runs, but every restart re-pages ~95k rows per county and
+# the background geocoder starts over from an empty cache.
+services:
+  - type: web
+    name: nyc-traffic-volume-update-finder
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Disks require a paid instance type — Render's free tier has no persistent
+    # storage and sleeps when idle, which means a cold 30-90s load on every wake.
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+
+    envVars:
+      # --- Deployment ---
+      - key: DATA_DIR
+        value: /data
+      - key: NODE_ENV
+        value: production
+      # The upstream AADT data is frozen at 2019 and NYC counts update a
+      # handful of segments a year, so a 24h TTL costs nothing in freshness and
+      # keeps restarts fast.
+      - key: DATASET_CACHE_TTL_MS
+        value: "86400000"
+
+      # --- Non-secret upstream config ---
+      - key: TOMTOM_BASE_URL
+        value: https://api.tomtom.com
+      - key: NY_OPEN_DATA_BASE_URL
+        value: https://data.cityofnewyork.us/api/v3/views/7ym2-wayt/query.json
+      - key: NYC_TRAFFIC_VOLUME_DATASET_ID
+        value: 7ym2-wayt
+      - key: OPEN_NY_BASE_URL
+        value: https://data.ny.gov/api/v3/views/6amx-2pbv/query.json
+      - key: OPEN_NY_AADT_DATASET_ID
+        value: 6amx-2pbv
+      - key: FIVE_ELEVEN_BASE_URL
+        value: https://511ny.org/api
+      - key: API_TIMEOUT_MS
+        value: "15000"
+
+      # --- Secrets: prompted on first deploy, never committed ---
+      - key: TOMTOM_API_KEY
+        sync: false
+      - key: NY_OPEN_DATA_APP_TOKEN
+        sync: false
+      - key: OPEN_NY_APP_TOKEN
+        sync: false
+      - key: FIVE_ELEVEN_API_KEY
+        sync: false

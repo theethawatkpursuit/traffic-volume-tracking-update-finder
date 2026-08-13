@@ -66,6 +66,68 @@ public/                          vanilla HTML/CSS/JS dashboard (no build step)
 test/                            node:test unit + spatial-join validation tests
 ```
 
+## Deploying
+
+The same build runs locally, in a container, and on a serverless host. Three
+things adapt at startup:
+
+- **Where caches are written** — `DATA_DIR`, else `<project>/data`, else the OS
+  temp directory. The first writable one wins (`server/utils/dataDir.js`).
+- **Whether the process listens** — `server.js` binds a port only when run
+  directly, and exports the Express app otherwise, so a serverless host can
+  import it (`api/index.js`).
+- **Whether the geocode warmup runs** — on by default when the cache directory
+  is persistent, off when it isn't, since a serverless invocation is killed
+  after its response and would burn Nominatim's rate limit for nothing.
+  Override with `ENABLE_GEOCODE_WARMUP`.
+
+**Set the environment variables on the host.** `.env` is gitignored and never
+uploaded; `server/config.js` throws at import if any required key is missing,
+which surfaces as every request returning 500. See `.env.example`.
+
+### Persistent host (recommended) — Render / Railway / Fly.io / Docker
+
+This is what the app is designed for. Use the `Dockerfile`, mount a volume, and
+point `DATA_DIR` at it so the dataset and geocode caches survive restarts.
+Nothing else needs changing.
+
+**Render** has a blueprint ready: New → Blueprint → point at this repo.
+`render.yaml` builds the Dockerfile, attaches a 1 GB disk at `/data`, sets
+`DATA_DIR` to match, health-checks `/api/health`, and prompts for the four API
+keys (they are marked `sync: false` so they never live in the repo).
+
+Two things to know before deploying there:
+
+- **A disk requires a paid instance type.** Render's free tier has no
+  persistent storage *and* sleeps when idle, so every wake would pay the full
+  30-90s cold load. The blueprint specifies `plan: starter` for that reason.
+- **`DATASET_CACHE_TTL_MS` is set to 24h**, not the 1h default. The upstream
+  AADT data is frozen at 2019 and NYC counts add ~100 segments a year, so a
+  long TTL costs nothing in freshness and makes restarts near-instant.
+
+`.dockerignore` keeps `.env`, `node_modules` and the local `data/` cache out of
+the image — secrets are supplied by the host at runtime, and a stale cached
+dataset baked into an image would ship old data while masking a broken fetch.
+
+### Serverless (Vercel)
+
+`vercel.json` and `api/index.js` make it deploy and run, but two limits are
+inherent to the platform rather than fixable by configuration:
+
+1. **Cold loads can exceed the function timeout.** A first-time county load
+   pages ~95k rows; Queens measured 75s against a 60s ceiling (10s default on
+   Hobby). Warm instances serve from cache in ~30ms, so behaviour is
+   inconsistent rather than uniformly broken.
+2. **Instances share no memory or disk.** The in-process dataset caches and the
+   progress tracker are per-instance, and `/tmp` is wiped between them. The
+   loading bar polls a *different invocation* than the one doing the work, so
+   it will usually report nothing.
+
+Making Vercel work properly means moving the dataset fetch out of request time
+— precompute the joined, scored segments on a schedule into a shared store
+(Vercel KV/Postgres) and serve reads from it. Until then, prefer a persistent
+host.
+
 ## Notable deviations from the literal spec — and why
 
 **1. The `.env` base URLs aren't the classic SODA `/resource` shape.**

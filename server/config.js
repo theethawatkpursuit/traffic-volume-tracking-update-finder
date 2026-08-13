@@ -1,5 +1,35 @@
 const path = require('node:path');
+const os = require('node:os');
+const { firstWritableDir } = require('./utils/dataDir');
 require('dotenv').config();
+
+/**
+ * Picks somewhere writable for the on-disk caches, so the same build runs
+ * unchanged locally, on a persistent host (Render/Railway/Fly/Docker) and on a
+ * read-only serverless target (Vercel).
+ *
+ * Order of preference:
+ *   1. DATA_DIR                — explicit, e.g. a mounted volume in production
+ *   2. <project>/data          — the local and container default
+ *   3. os.tmpdir()             — last resort; writable on Vercel but wiped
+ *                                between instances, so caches don't persist
+ *
+ * `dataDirIsPersistent` tells the rest of the app which of those it got: work
+ * that only pays off across restarts (the background geocode warmup) is
+ * pointless on ephemeral storage and is skipped there.
+ */
+const projectDataDir = path.join(__dirname, '..', 'data');
+const ephemeralDataDir = path.join(os.tmpdir(), 'nyc-traffic-volume-update-finder');
+const resolvedDataDir =
+  firstWritableDir([process.env.DATA_DIR, projectDataDir, ephemeralDataDir]) ?? ephemeralDataDir;
+const dataDirIsPersistent = resolvedDataDir !== ephemeralDataDir;
+
+if (!dataDirIsPersistent) {
+  console.warn(
+    `[config] no persistent data directory available; caching to ${resolvedDataDir}. ` +
+      'Caches will not survive restarts. Set DATA_DIR to a writable volume to fix.'
+  );
+}
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -90,9 +120,18 @@ module.exports = {
   // much shorter TTL than the two historical datasets' 1 hour.
   eventsCacheTtlMs: Number(process.env.EVENTS_CACHE_TTL_MS) || 5 * 60 * 1000, // 5m
 
-  // On-disk caches (gitignored)
-  dataDir: path.join(__dirname, '..', 'data'),
-  geocodeCachePath: path.join(__dirname, '..', 'data', 'geocode-cache.json'),
-  datasetCachePath: path.join(__dirname, '..', 'data', 'dataset-cache.json'),
+  // On-disk caches (gitignored). Location resolved at startup — see
+  // firstWritableDir above.
+  dataDir: resolvedDataDir,
+  dataDirIsPersistent,
+  geocodeCachePath: path.join(resolvedDataDir, 'geocode-cache.json'),
+  datasetCachePath: path.join(resolvedDataDir, 'dataset-cache.json'),
+
+  // Background geocode warmup makes sense only in a long-lived process with
+  // somewhere durable to write. Serverless invocations are killed after the
+  // response, so it would burn Nominatim's rate limit for nothing.
+  enableGeocodeWarmup:
+    process.env.ENABLE_GEOCODE_WARMUP === 'true' ||
+    (process.env.ENABLE_GEOCODE_WARMUP !== 'false' && dataDirIsPersistent),
   datasetCacheTtlMs: Number(process.env.DATASET_CACHE_TTL_MS) || 60 * 60 * 1000, // 1h
 };

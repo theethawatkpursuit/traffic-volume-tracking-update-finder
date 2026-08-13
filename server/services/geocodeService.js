@@ -37,11 +37,18 @@ function loadCache() {
 }
 
 function saveCache() {
-  ensureDataDir();
-  const tmpPath = `${config.geocodeCachePath}.tmp`;
-  const obj = Object.fromEntries(cache.entries());
-  fs.writeFileSync(tmpPath, JSON.stringify(obj), 'utf8');
-  fs.renameSync(tmpPath, config.geocodeCachePath); // atomic swap
+  // Best-effort, like datasetCache: an unwritable filesystem (a read-only
+  // deploy target, a restricted container) must not break geocoding — the
+  // in-memory cache still serves this process, it just won't outlive it.
+  try {
+    ensureDataDir();
+    const tmpPath = `${config.geocodeCachePath}.tmp`;
+    const obj = Object.fromEntries(cache.entries());
+    fs.writeFileSync(tmpPath, JSON.stringify(obj), 'utf8');
+    fs.renameSync(tmpPath, config.geocodeCachePath); // atomic swap
+  } catch (err) {
+    console.warn('[geocode] could not persist cache:', err.message);
+  }
 }
 
 // Keyed on road + the station's begin-point cross-street, not just road +
